@@ -17,7 +17,6 @@
   table { border-collapse:collapse; margin-top:14px; }
   td { padding:3px 0; vertical-align:top; }
   td.et { width:200px; }
-  #comH, #comM { width:28px; }
   input[type=text] { font:13px "Segoe UI", Arial, sans-serif; border:1px solid #7a7a7a; padding:2px 3px; background:#fff; }
   label { display:block; margin:0 0 6px; }
   small { color:#000; font-size:12px; }
@@ -39,34 +38,18 @@
 
     <table>
       <tr>
-        <td class="et">Modo:</td>
-        <td>
-          <label><input type="radio" name="modo" value="ts" checked> Horas registradas (Timesheet)</label>
-          <label><input type="radio" name="modo" value="pd"> Horas productivas directas</label>
-        </td>
-      </tr>
-      <tr class="espacio"><td colspan="2"></td></tr>
-      <tr>
         <td class="et">Frase:</td>
         <td><input type="text" id="frase" size="38"></td>
       </tr>
-      <tr><td></td><td><small>(ej: Hice 142 tareas en 9 horas, comí 45 min)</small></td></tr>
+      <tr><td></td><td><small>(ej: Hice 142 tareas en 9 horas)</small></td></tr>
       <tr class="espacio"><td colspan="2"></td></tr>
       <tr>
         <td class="et">Tareas:</td>
         <td><input type="text" id="tareas" size="8"></td>
       </tr>
       <tr>
-        <td class="et" id="lblHoras">Horas registradas:</td>
+        <td class="et" id="lblHoras">Horas productivas:</td>
         <td><input type="text" id="horas" size="8"></td>
-      </tr>
-      <tr id="filaComida">
-        <td class="et">Comida:</td>
-        <td>
-          <input type="text" id="comH" size="2" value="1"> h
-          <input type="text" id="comM" size="2" value="0"> min
-          <button type="button" data-min="0">0</button><button type="button" data-min="30">30m</button><button type="button" data-min="45">45m</button><button type="button" data-min="60">1h</button><button type="button" data-min="75">1h15</button><button type="button" data-min="90">1h30</button>
-        </td>
       </tr>
     </table>
     <br>
@@ -101,17 +84,12 @@ async function iniciar(){
   }
 }
 
-const modo = () => document.querySelector('input[name=modo]:checked').value;
+const modo = () => 'pd';  // solo horas productivas directas
 
 function aNumero(s){
   if (!py) return null;
   const v = py.a_numero(s);
   return v === undefined ? null : v;
-}
-
-function ponerComida(min){
-  $('comH').value = Math.floor(min / 60);
-  $('comM').value = min % 60;
 }
 
 function mostrar(texto){ $('resultado').value = texto; }
@@ -121,10 +99,8 @@ function calcularYMostrar(){
   const tareas = aNumero($('tareas').value);
   const horas = aNumero($('horas').value);
   if (tareas === null || horas === null){ mostrar('Faltan tareas u horas.'); return; }
-  const h = aNumero($('comH').value || '0'), m = aNumero($('comM').value || '0');
-  if (h === null || m === null){ mostrar('Tiempo de comida no válido.'); return; }
   try {
-    mostrar(py.calcular(tareas, horas, modo(), h * 60 + m));
+    mostrar(py.calcular(tareas, horas, modo()));
   } catch (e) {
     const linea = String(e.message).trim().split('\n').pop();
     mostrar('ERROR: ' + linea.replace(/^ValueError:\s*/, ''));
@@ -136,20 +112,12 @@ function leerFrase(){
   const d = py.leer_frase($('frase').value).toJs({dict_converter: Object.fromEntries});
   $('tareas').value = d.tareas ?? '';
   $('horas').value = d.horas ?? '';
-  if (d.comida_min !== null && d.comida_min !== undefined) ponerComida(Math.round(d.comida_min));
   calcularYMostrar();
 }
 
 // Eventos
-document.querySelectorAll('input[name=modo]').forEach(r => r.onchange = () => {
-  const ts = modo() === 'ts';
-  $('lblHoras').textContent = ts ? 'Horas registradas:' : 'Horas productivas:';
-  $('filaComida').hidden = !ts;
-  calcularYMostrar();
-});
 $('frase').addEventListener('input', leerFrase);
-['tareas', 'horas', 'comH', 'comM'].forEach(id => $(id).addEventListener('input', calcularYMostrar));
-document.querySelectorAll('button[data-min]').forEach(b => b.onclick = () => { ponerComida(+b.dataset.min); calcularYMostrar(); });
+['tareas', 'horas'].forEach(id => $(id).addEventListener('input', calcularYMostrar));
 $('btnCalcular').onclick = calcularYMostrar;
 document.addEventListener('keydown', e => { if (e.key === 'Enter') calcularYMostrar(); });
 
