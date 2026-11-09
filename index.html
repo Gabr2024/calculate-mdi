@@ -17,6 +17,7 @@
   table { border-collapse:collapse; margin-top:14px; }
   td { padding:3px 0; vertical-align:top; }
   td.et { width:200px; }
+  select { font:13px "Segoe UI", Arial, sans-serif; border:1px solid #7a7a7a; padding:2px; background:#fff; min-width:260px; }
   input[type=text] { font:13px "Segoe UI", Arial, sans-serif; border:1px solid #7a7a7a; padding:2px 3px; background:#fff; }
   label { display:block; margin:0 0 6px; }
   small { color:#000; font-size:12px; }
@@ -34,9 +35,14 @@
   <div class="barra"><span>🪶 Calculadora MDI</span><span class="ctrl"><i>—</i><i>☐</i><i>✕</i></span></div>
   <div class="contenido">
     <h1>Calculadora MDI</h1>
-    Mínimo: 18 tareas/hora. Ideal: 20 tareas/hora.
+    <span id="metasTxt">Elige tu workflow.</span>
 
     <table>
+      <tr>
+        <td class="et">Workflow:</td>
+        <td><select id="workflow"><option value="">Cargando…</option></select></td>
+      </tr>
+      <tr class="espacio"><td colspan="2"></td></tr>
       <tr>
         <td class="et">Frase:</td>
         <td><input type="text" id="frase" size="38"></td>
@@ -77,6 +83,7 @@ async function iniciar(){
     pyodide.FS.writeFile('productividad.py', codigo);
     pyodide.runPython('import sys; sys.path.insert(0, "."); import productividad');
     py = pyodide.pyimport('productividad');
+    llenarWorkflows();
     $('cargando').textContent = '';
     calcularYMostrar();
   } catch (e) {
@@ -98,9 +105,12 @@ function calcularYMostrar(){
   if (!py) return;
   const tareas = aNumero($('tareas').value);
   const horas = aNumero($('horas').value);
-  if (tareas === null || horas === null){ mostrar('Faltan tareas u horas.'); return; }
+  const wf = $('workflow').value;
+  if (!wf){ mostrar('Elige un workflow.'); return; }
+  if (horas === null){ mostrar('Escribe las horas productivas para ver las tareas esperadas.'); return; }
   try {
-    mostrar(py.calcular(tareas, horas, modo()));
+    // Sin tareas: solo muestra cuántas tareas se esperan en esas horas
+    mostrar(py.calcular(tareas, horas, modo(), 60, wf));
   } catch (e) {
     const linea = String(e.message).trim().split('\n').pop();
     mostrar('ERROR: ' + linea.replace(/^ValueError:\s*/, ''));
@@ -115,7 +125,32 @@ function leerFrase(){
   calcularYMostrar();
 }
 
+function llenarWorkflows(){
+  const wfs = py.WORKFLOWS.toJs({dict_converter: Object.fromEntries});
+  const sel = $('workflow');
+  sel.innerHTML = '<option value="">-- Elige tu workflow --</option>';
+  for (const [nombre, [m, t]] of Object.entries(wfs)){
+    const o = document.createElement('option');
+    o.value = nombre; o.textContent = nombre; o.dataset.m = m; o.dataset.t = t;
+    sel.appendChild(o);
+  }
+  try { const g = localStorage.getItem('mdi_workflow'); if (g && wfs[g]) sel.value = g; } catch(e) {}
+  actualizarMetas();
+}
+
+function actualizarMetas(){
+  const o = $('workflow').selectedOptions[0];
+  $('metasTxt').textContent = o && o.value
+    ? `Mínimo: ${o.dataset.m} tareas/hora. Ideal: ${o.dataset.t} tareas/hora.`
+    : 'Elige tu workflow.';
+}
+
 // Eventos
+$('workflow').addEventListener('change', () => {
+  try { localStorage.setItem('mdi_workflow', $('workflow').value); } catch(e) {}
+  actualizarMetas();
+  calcularYMostrar();
+});
 $('frase').addEventListener('input', leerFrase);
 ['tareas', 'horas'].forEach(id => $(id).addEventListener('input', calcularYMostrar));
 $('btnCalcular').onclick = calcularYMostrar;

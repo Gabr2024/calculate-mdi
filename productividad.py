@@ -1,11 +1,12 @@
 """
 Calculadora de Productividad para Map Editors
 ---------------------------------------------
-Meta mínima: 18 tareas por hora productiva
-Meta ideal:  20 tareas por hora productiva
+Cada workflow tiene su propia meta por hora productiva:
+  - Baseline (mínimo)  -> tabla WORKFLOWS, primer número
+  - Efficiency target  -> tabla WORKFLOWS, segundo número
 
-Productividad      = Tareas ÷ (Horas productivas × 18) × 100
-Valor para captura = Tareas ÷ (Horas productivas × 18)
+Productividad      = Tareas ÷ (Horas productivas × Baseline) × 100
+Valor para captura = Tareas ÷ (Horas productivas × Baseline)
 
 Uso:
     python productividad.py
@@ -17,6 +18,27 @@ Solo usa la biblioteca estándar de Python (3.8 o más nuevo). No hay que instal
 import re
 import sys
 
+# Metas por hora productiva: "Workflow": (Q1-26 BASELINE, Efficiency target)
+# Para cambiar una meta o agregar un workflow, edita solo esta tabla.
+WORKFLOWS = {
+    "Auto Endorse": (36, 40),
+    "Exceptions": (28, 31),
+    "Features / FedEx Place": (23, 26),
+    "Map Edits - DiDi - Atlas": (23, 25),
+    "Map Edits - FedEx": (18, 20),
+    "Map Feedback Amazon - Motive": (4, 4),
+    "Map Feedback DiDi": (6, 6),
+    "Map Feedback PC 4-7": (2, 2),
+    "Map Feedback Smart-Tag": (5, 6),
+    "Map Jobs": (23, 25),
+    "Moderation - DiDi - Map Creator": (40, 45),
+    "Moderation - Map Edits": (21, 23),
+    "PAF": (34, 38),
+    "Places": (22, 25),
+    "Speed Limit": (3, 3),
+}
+
+# Valores por defecto si no se elige workflow
 META_HORA = 18   # mínimo
 IDEAL_HORA = 20  # ideal
 COMIDA_DEFAULT_MIN = 60
@@ -150,19 +172,49 @@ def leer_frase(frase):
 # ---------------------------------------------------------------------------
 # Cálculo
 # ---------------------------------------------------------------------------
-def calcular(tareas, horas, modo="ts", comida_min=COMIDA_DEFAULT_MIN):
+def metas_de(workflow=None):
+    """Devuelve (meta_por_hora, ideal_por_hora) del workflow, o 18/20 si no hay."""
+    if workflow and workflow in WORKFLOWS:
+        return WORKFLOWS[workflow]
+    return META_HORA, IDEAL_HORA
+
+
+def calcular(tareas, horas, modo="ts", comida_min=COMIDA_DEFAULT_MIN, workflow=None):
     """
     modo 'ts' = horas registradas en Timesheet (se resta la comida)
     modo 'pd' = horas productivas directas (no se resta nada)
+    workflow  = nombre de la tabla WORKFLOWS (define las metas por hora)
+    Si tareas es None, solo muestra las tareas esperadas para esas horas.
     Devuelve el texto del resultado.
     """
+    meta_h, ideal_h = metas_de(workflow)
     comida_h = comida_min / 60 if modo == "ts" else 0
     productivas = horas - comida_h
     if productivas <= 0:
         raise ValueError("Las horas productivas deben ser mayores a 0.")
 
-    meta = productivas * META_HORA
-    meta_ideal = productivas * IDEAL_HORA
+    meta = productivas * meta_h
+    meta_ideal = productivas * ideal_h
+
+    lineas = []
+    if workflow:
+        lineas += [f"Workflow: {workflow}", ""]
+    if tareas is not None:
+        lineas.append(f"Tareas realizadas: {bonito(tareas)}")
+    if modo == "ts":
+        lineas += [
+            f"Horas registradas: {bonito(horas)}",
+            f"Horas de comida: {bonito(comida_h)} ({minutos_a_texto(comida_min)})",
+        ]
+    lineas += [
+        f"Horas productivas: {bonito(productivas)}",
+        "",
+        f"Meta mínima ({bonito(meta_h)}/h): {bonito(meta)} tareas",
+        f"Meta ideal ({bonito(ideal_h)}/h): {bonito(meta_ideal)} tareas",
+    ]
+    if tareas is None:
+        return "\n".join(lineas)
+
     valor = tareas / meta
     pct = redondear(valor * 100)
     pct_ideal = redondear(tareas / meta_ideal * 100)
@@ -178,17 +230,7 @@ def calcular(tareas, horas, modo="ts", comida_min=COMIDA_DEFAULT_MIN):
     else:
         estado = f"[X] Faltaron {bonito(-diff)} tareas para el mínimo"
 
-    lineas = [f"Tareas realizadas: {bonito(tareas)}"]
-    if modo == "ts":
-        lineas += [
-            f"Horas registradas: {bonito(horas)}",
-            f"Horas de comida: {bonito(comida_h)} ({minutos_a_texto(comida_min)})",
-        ]
     lineas += [
-        f"Horas productivas: {bonito(productivas)}",
-        "",
-        f"Meta mínima (18/h): {bonito(meta)}",
-        f"Meta ideal (20/h): {bonito(meta_ideal)}",
         "",
         f"Productividad: {pct:.2f}%",
         f"Valor para captura: {redondear(valor):.2f}",
@@ -239,7 +281,22 @@ def preguntar_comida():
     return COMIDA_DEFAULT_MIN
 
 
+def preguntar_workflow():
+    nombres = list(WORKFLOWS)
+    print("Workflow:")
+    for i, n in enumerate(nombres, 1):
+        m, t = WORKFLOWS[n]
+        print(f"  {i:2}) {n}  (mín {m}/h · ideal {t}/h)")
+    while True:
+        r = input("Número de workflow: ").strip()
+        if r.isdigit() and 1 <= int(r) <= len(nombres):
+            return nombres[int(r) - 1]
+        print("  Número no válido.")
+
+
 def una_vuelta(frase=None):
+    workflow = preguntar_workflow()
+    print()
     modo = preguntar_modo()
     if frase is None:
         frase = input("\nEscribe tu frase (ej: 'Hice 142 tareas en 9 horas, comí 45 min')\n"
@@ -256,7 +313,8 @@ def una_vuelta(frase=None):
 
     try:
         texto = calcular(datos["tareas"], datos["horas"], modo,
-                         datos["comida_min"] if datos["comida_min"] is not None else COMIDA_DEFAULT_MIN)
+                         datos["comida_min"] if datos["comida_min"] is not None else COMIDA_DEFAULT_MIN,
+                         workflow)
     except ValueError as e:
         print(f"\nERROR: {e}")
         return
@@ -266,7 +324,7 @@ def una_vuelta(frase=None):
 
 
 def main():
-    print("=== Calculadora de Productividad (mín 18/h · ideal 20/h) ===\n")
+    print("=== Calculadora MDI ===\n")
     if len(sys.argv) > 1:  # frase pasada como argumento
         una_vuelta(" ".join(sys.argv[1:]))
         return
