@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calculadora de Productividad – Map Editors</title>
+</head>
+<body>
+<h2>Calculadora de Productividad</h2>
+Mínimo: 18 tareas/hora. Ideal: 20 tareas/hora.
+<br><br>
+<form id="form" autocomplete="off">
+<table>
+  <tr>
+    <td valign="top">Modo:</td>
+    <td>
+      <label><input type="radio" name="modo" value="ts" checked> Horas registradas (Timesheet)</label><br>
+      <label><input type="radio" name="modo" value="pd"> Horas productivas directas</label>
+    </td>
+  </tr>
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr>
+    <td>Frase:</td>
+    <td><input type="text" id="nl" size="40"></td>
+  </tr>
+  <tr>
+    <td></td>
+    <td><small>(ej: <a href="#" class="ej">Hice 142 tareas en 9 horas</a>, <a href="#" class="ej">150 tareas en 9h, comí 45 min</a>)</small></td>
+  </tr>
+  <tr><td colspan="2">&nbsp;</td></tr>
+  <tr>
+    <td>Tareas:</td>
+    <td><input type="text" id="t" size="8"></td>
+  </tr>
+  <tr>
+    <td id="hLbl">Horas registradas:</td>
+    <td><input type="text" id="h" size="8"></td>
+  </tr>
+  <tr class="comida">
+    <td>Comida:</td>
+    <td>
+      <input type="text" id="cH" size="2" value="1"> h
+      <input type="text" id="cM" size="2" value="0"> min
+      <button type="button" data-min="0">0</button><button type="button" data-min="30">30m</button><button type="button" data-min="45">45m</button><button type="button" data-min="60">1h</button><button type="button" data-min="75">1h15</button><button type="button" data-min="90">1h30</button>
+    </td>
+  </tr>
+</table>
+<br>
+<button type="button" id="btnCalc">Calcular</button>
+<span id="err" hidden> ERROR: <span id="errTxt"></span></span>
+</form>
+<br>
+<textarea id="tabla" rows="16" cols="62" readonly></textarea>
+<br>
+<button type="button" id="copyAll">Copiar resultado</button><button type="button" id="copyVal">Copiar valor</button> <span id="copyMsg"></span>
+<div hidden><span id="out"></span><span id="pct"></span><span id="estado"></span><span id="avanceTxt"></span></div>
+<script>
+const META_HORA = 18;   // mínimo
+const IDEAL_HORA = 20;  // ideal
+const $ = id => document.getElementById(id);
+let syncing = false;
+
+function num(s){
+  if (s == null) return NaN;
+  s = String(s).trim();
+  const hm = s.match(/^(\d+):(\d{1,2})$/);   // 8:45 → 8.75
+  if (hm) return +hm[1] + (+hm[2])/60;
+  return parseFloat(s.replace(',', '.'));
+}
+const modo = () => document.querySelector('input[name=modo]:checked').value;
+
+// ---------- Lenguaje natural ----------
+const N = '(\\d+(?:[.,]\\d+)?(?::\\d{1,2})?)';
+// Devuelve {min, text} con el tiempo de comida si la frase lo menciona
+function parseComida(s){
+  const KW = '(?:comida|com[ií]|comer|lunch|almuerzo|almorc[eé])';
+  if (new RegExp('sin\\s+'+KW+'|no\\s+com[ií]').test(s)) return {min:0, text:s.match(new RegExp('sin\\s+'+KW+'|no\\s+com[ií]'))[0]};
+  const T = '(hora\\s+y\\s+media|media\\s+hora|una\\s+hora|\\d+\\s*(?:h|hr|hrs|horas?)\\s*(?:y\\s*)?\\d+\\s*(?:min|minutos|mins|m)?|\\d+:\\d{1,2}|\\d+(?:[.,]\\d+)?\\s*(?:min|minutos|mins|m\\b|h\\b|hr|hrs|horas?)?)';
+  let m = s.match(new RegExp(KW+'\\s*(?:de|:|por|durante)?\\s*'+T)) || s.match(new RegExp(T+'\\s*(?:de\\s*)?'+KW));
+  if (!m) return null;
+  const t = m[1].trim();
+  let min, x;
+  if (/hora\s+y\s+media/.test(t)) min = 90;
+  else if (/media\s+hora/.test(t)) min = 30;
+  else if (/una\s+hora/.test(t)) min = 60;
+  else if ((x = t.match(/^(\d+)\s*(?:h|hr|hrs|horas?)\s*(?:y\s*)?(\d+)/))) min = +x[1]*60 + +x[2];
+  else if ((x = t.match(/^(\d+):(\d{1,2})$/))) min = +x[1]*60 + +x[2];
+  else if ((x = t.match(/^(\d+(?:[.,]\d+)?)\s*(min|minutos|mins|m)$/))) min = num(x[1]);
+  else if ((x = t.match(/^(\d+(?:[.,]\d+)?)\s*(h|hr|hrs|horas?)$/))) min = num(x[1])*60;
+  else { const v = num(t); min = v >= 10 ? v : v*60; } // número suelto: ≥10 = minutos
+  return isNaN(min) ? null : {min: Math.round(min), text: m[0]};
+}
+
+function parseNL(text){
+  const s = text.toLowerCase();
+  const r = {};
+  let m;
+
+  const c = parseComida(s);
+  if (c){ r.cMin = c.min; }
+  const clean = c ? s.replace(c.text, ' ') : s;
+
+  // Tareas
+  if ((m = clean.match(new RegExp(N+'\\s*(tareas?|tasks?|edits?|ediciones?|edici[oó]n)'))))
+    r.t = num(m[1]);
+  // Horas
+  if ((m = clean.match(new RegExp(N+'\\s*(h|hr|hrs|horas?|hours?)\\b'))))
+    r.h = num(m[1]);
+  else if ((m = clean.match(/(\d+):(\d{1,2})/)))
+    r.h = num(m[0]);
+
+  // Respaldo: "142 en 9"
+  if (r.t == null || r.h == null){
+    const nums = (clean.match(/\d+(?:[.,]\d+)?(?::\d{1,2})?/g) || []).map(num);
+    const rest = nums.filter(x => x !== r.t && x !== r.h);
+    if (r.t == null && rest.length) r.t = rest.shift();
+    if (r.h == null && rest.length) r.h = rest.shift();
+  }
+  return r;
+}
+
+// ---------- Eventos ----------
+document.querySelectorAll('input[name=modo]').forEach(r => r.onchange = () => {
+  const ts = modo() === 'ts';
+  $('hLbl').textContent = ts ? 'Horas registradas:' : 'Horas productivas:';
+  document.querySelectorAll('.comida').forEach(el => el.hidden = !ts);
+  calc();
+});
+
+$('nl').addEventListener('input', () => {
+  const r = parseNL($('nl').value);
+  syncing = true;
+  $('t').value = r.t != null && !isNaN(r.t) ? r.t : '';
+  $('h').value = r.h != null && !isNaN(r.h) ? +r.h.toFixed(4) : '';
+  if (r.cMin != null) setMeal(r.cMin);
+  syncing = false;
+  calc();
+});
+['t','h','cH','cM'].forEach(id => $(id).addEventListener('input', () => { if (!syncing) calc(); }));
+document.querySelectorAll('button[data-min]').forEach(b => b.onclick = () => { setMeal(+b.dataset.min); calc(); });
+document.querySelectorAll('a.ej').forEach(a => a.onclick = e => {
+  e.preventDefault(); $('nl').value = a.textContent; $('nl').dispatchEvent(new Event('input'));
+});
+$('form').onsubmit = e => e.preventDefault();
+$('btnCalc').onclick = () => calc();
+
+function setMeal(min){ $('cH').value = Math.floor(min/60); $('cM').value = min % 60; }
+function mealMinutes(){
+  const h = $('cH').value.trim() === '' ? 0 : num($('cH').value);
+  const m = $('cM').value.trim() === '' ? 0 : num($('cM').value);
+  return h*60 + m;
+}
+const minTxt = min => { const h = Math.floor(min/60), m = Math.round(min%60);
+  return min === 0 ? 'sin comida' : (h ? h+' h' : '') + (h && m ? ' ' : '') + (m ? m+' min' : ''); };
+
+// ---------- Cálculo ----------
+const fmt = (x, d=2) => {
+  const v = Math.round((x + Number.EPSILON) * 10**d) / 10**d;
+  return Number.isInteger(v) ? String(v) : v.toFixed(d).replace(/0+$/,'').replace(/\.$/,'');
+};
+const fix2 = x => (Math.round((x + Number.EPSILON) * 100) / 100).toFixed(2);
+const sign = d => d === 0 ? '0 tareas' : (d > 0 ? '+' : '') + fmt(d) + ' tareas';
+
+function fail(msg){ $('errTxt').textContent = msg; $('err').hidden = !msg; if (msg) $('tabla').value = ''; }
+
+let textoPlano = '', valor = '';
+
+function calc(){
+  const tStr = $('t').value, hStr = $('h').value;
+  if (!tStr && !hStr){ fail(''); $('tabla').value = ''; return; }
+  const tareas = num(tStr), horas = num(hStr);
+  if (isNaN(tareas)) return fail('Falta el número de tareas.');
+  if (isNaN(horas))  return fail('Faltan las horas.');
+
+  const ts = modo() === 'ts';
+  let comida = 0, prod = horas;
+  if (ts){
+    const cMin = mealMinutes();
+    if (isNaN(cMin) || cMin < 0) return fail('Tiempo de comida no válido.');
+    comida = cMin / 60;
+    prod = horas - comida;
+  }
+  if (prod <= 0) return fail('Las horas productivas deben ser mayores a 0.');
+  fail('');
+
+  const meta = prod * META_HORA, metaIdeal = prod * IDEAL_HORA;
+  const ratio = tareas / meta;
+  const pct = Math.round(ratio * 10000) / 100;
+  const pctIdeal = Math.round(tareas / metaIdeal * 10000) / 100;
+  const diff = Math.round((tareas - meta) * 100) / 100;
+  const diffIdeal = Math.round((tareas - metaIdeal) * 100) / 100;
+
+  let estado;
+  if (diffIdeal >= 0) estado = diffIdeal === 0 ? '[OK] Meta ideal alcanzada' : `[OK] Superaste la meta ideal por ${fmt(diffIdeal)} tareas`;
+  else if (diff >= 0) estado = '[MEDIO] ' + (diff === 0 ? 'Mínimo alcanzado' : `Mínimo superado por ${fmt(diff)}`) + ` · faltan ${fmt(-diffIdeal)} para el ideal`;
+  else estado = `[X] Faltaron ${fmt(-diff)} tareas para el mínimo`;
+
+  // filas: [etiqueta, valor] ; null = separador
+  const filas = [['Tareas realizadas', fmt(tareas)]];
+  if (ts) filas.push(['Horas registradas', fmt(horas)], ['Horas de comida', `${fmt(comida)} (${minTxt(comida*60)})`]);
+  filas.push(['Horas productivas', fmt(prod)], null,
+             ['Meta mínima (18/h)', fmt(meta)], ['Meta ideal (20/h)', fmt(metaIdeal)], null,
+             ['Productividad', fix2(pct) + '%'], ['Valor para captura', fix2(ratio)], null,
+             ['Diferencia contra meta mínima', sign(diff)],
+             ['Diferencia contra meta ideal', `${sign(diffIdeal)} (${fix2(pctIdeal)}% del ideal)`]);
+
+  textoPlano = filas.map(f => f ? `${f[0]}: ${f[1]}` : '').join('\n');
+  valor = fix2(ratio);
+  $('tabla').value = textoPlano + '\n\n' + estado;
+  $('pct').textContent = 'Productividad: ' + fix2(pct) + '%';
+  $('estado').textContent = estado;
+  $('avanceTxt').textContent = fix2(pctIdeal) + '%';
+  $('out').hidden = false;
+}
+
+async function copy(text){
+  try { await navigator.clipboard.writeText(text); $('copyMsg').textContent = '¡Copiado!'; }
+  catch(e){ $('copyMsg').textContent = 'No se pudo copiar'; }
+  setTimeout(() => $('copyMsg').textContent = '', 1400);
+}
+$('copyAll').onclick = () => copy(textoPlano);
+$('copyVal').onclick = () => copy(valor);
+</script>
+</body>
+</html>
